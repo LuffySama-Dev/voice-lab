@@ -1,0 +1,11 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {setTimeout as delay} from 'node:timers/promises';
+import {YapSegments,recognizeProcess} from '../src/yap.js';
+
+test('YAP pretty JSON streaming handles fragmented escaped strings and emits each final segment once',()=>{const parser=new YapSegments();const document=JSON.stringify({metadata:{language:'en-US'},segments:[{id:1,text:'Braces { }, a "quote", café'},{id:2,text:'next'}]},null,2);const texts:string[]=[];for(const c of document)texts.push(...parser.add(c));assert.deepEqual(texts,['Braces { }, a "quote", café','next']);assert.equal(parser.finish(),'Braces { }, a "quote", café next');});
+test('YAP rejects malformed or oversized output',()=>{assert.throws(()=>new YapSegments().add('x'.repeat(100001)));assert.throws(()=>new YapSegments().finish());});
+test('native commit flushes final tail once after process exit',async()=>{const events:Record<string,unknown>[]=[];const child=spawn(process.execPath,['tests/fixtures/fake-yap.mjs']);const control=new AbortController();const r=await recognizeProcess(child,e=>events.push(e),control.signal);for(let i=0;i<30&&!events.length;i++)await delay(10);r.commit();r.commit();for(let i=0;i<30&&!events.some(e=>e.type==='transcript.final');i++)await delay(10);assert.equal(events.filter(e=>e.type==='transcript.final').length,1);assert.equal(events.at(-1)?.text,'Synthetic first segment Final words');assert.equal(r.native,true);control.abort();});
+test('native cancel kills child and never produces final transcript',async()=>{const events:Record<string,unknown>[]=[];const child=spawn(process.execPath,['tests/fixtures/fake-yap.mjs']);const control=new AbortController();const r=await recognizeProcess(child,e=>events.push(e),control.signal);await delay(30);r.cancel();await delay(40);assert.equal(child.signalCode,'SIGKILL');assert.equal(events.some(e=>e.type==='transcript.final'),false);});
+test('native unexpected exit is actionable and does not leak stderr',async()=>{const events:Record<string,unknown>[]=[];const child=spawn(process.execPath,['tests/fixtures/fake-yap.mjs','fail']);await recognizeProcess(child,e=>events.push(e),new AbortController().signal);await delay(80);assert.ok(events.some(e=>e.type==='error'));});

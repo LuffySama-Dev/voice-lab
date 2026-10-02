@@ -1,0 +1,35 @@
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+.npmrc
+
+# Dependencies, compiled output, local tooling and test artifacts
+node_modules/
+dist/
+bin/
+.runtime/
+evidence/
+test-results/
+playwright-report/
+coverage/
+.DS_Store
+*.log
+
+# User recordings, transcripts and screenshots are never checkpointed
+recordings/
+transcripts/
+*.wav
+*.aif
+*.aiff
+*.mp3
+*.m4a
+*.mp4
+*.webm
+*.png
+*.jpg
+*.jpeg
