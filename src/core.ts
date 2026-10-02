@@ -2,6 +2,7 @@ export type Emit = (event: Record<string, unknown>) => void;
 export interface Speech { push(text: string): void; finish(): Promise<void>; cancel(): void }
 export interface Recognition { native?: boolean; append(audio: string): void; commit(): void; cancel(): void }
 export interface Providers {
+  close?():void;
   recognize(emit: Emit, signal: AbortSignal): Promise<Recognition>;
   generate(history: {role: string; content: string}[], signal: AbortSignal): AsyncIterable<string>;
   speak(emit: Emit, signal: AbortSignal): Promise<Speech>;
@@ -36,13 +37,14 @@ export class Session {
   private bytes = 0;
   private active = false;
   private history: {role: string; content: string}[] = [];
-  constructor(private providers: Providers, private emit: Emit, private transcriptionOnly = false) {}
+  private autoCommit?: ReturnType<typeof setTimeout>;
+  constructor(private providers: Providers, private emit: Emit, private transcriptionOnly = false, private options:{textOnly?:boolean;autoTurnMs?:number} = {}) {}
   cancel(stop = false) {
     this.epoch++;
     this.control?.abort(); this.recognition?.cancel(); this.speech?.cancel();
-    clearTimeout(this.timer);
+    clearTimeout(this.timer);clearTimeout(this.autoCommit);
     this.recognition = undefined; this.speech = undefined; this.committing = false; this.bytes = 0;
-    if (stop) { this.active = false; this.history = []; }
+    if (stop) { this.active = false; this.history = []; this.providers.close?.(); }
     this.emit({type:'cancelled', epoch:this.epoch, stopped:stop});
   }
   private begin() {
@@ -60,6 +62,10 @@ export class Session {
     try {
       const recognition = await this.providers.recognize(event => {
         if (epoch !== this.epoch) return;
+        if (event.type === 'transcript.snapshot' && this.options.autoTurnMs && !this.committing) {
+          clearTimeout(this.autoCommit);
+          if(typeof event.finalized==='string' && event.finalized.trim() && event.draft==='') this.autoCommit=setTimeout(()=>{if(epoch===this.epoch)this.commit();},this.options.autoTurnMs);
+        }
         if (event.type === 'transcript.final') {
           if (!this.committing) return;
           const text = String(event.text || '').trim();
@@ -90,7 +96,7 @@ export class Session {
     if (!this.recognition || this.committing) return;
     if (!this.recognition.native && this.bytes < 4_800) { this.fail('Speak for a moment before sending.'); return; }
     this.committing = true;
-    clearTimeout(this.timer);
+    clearTimeout(this.autoCommit);clearTimeout(this.timer);
     const epoch = this.epoch;
     this.timer = setTimeout(() => { if (epoch === this.epoch) this.fail('Transcription finalization timed out. Start again.'); }, 20_000);
     this.emit({type:'status',state:'transcribing',epoch:this.epoch});
@@ -104,7 +110,7 @@ export class Session {
     this.history = this.history.slice(-12);
     let full = '';
     try {
-      const speech = await this.providers.speak(send, signal);
+      const speech:Speech = this.options.textOnly ? {push:()=>{},finish:async()=>{},cancel:()=>{}} : await this.providers.speak(send, signal);
       if (epoch !== this.epoch) { speech.cancel(); return; }
       this.speech = speech;
       const phrases = new Phrases();
@@ -113,15 +119,16 @@ export class Session {
         full += delta;
         if (full.length > 12_000) throw new Error('Response limit');
         send({type:'response.delta',text:delta});
-        for (const phrase of phrases.add(delta)) { speech.push(phrase); send({type:'phrase',text:phrase}); }
+        for (const phrase of phrases.add(delta)) { speech.push(phrase); if(!this.options.textOnly)send({type:'phrase',text:phrase}); }
       }
-      for (const phrase of phrases.add('',true)) { speech.push(phrase); send({type:'phrase',text:phrase}); }
+      for (const phrase of phrases.add('',true)) { speech.push(phrase); if(!this.options.textOnly)send({type:'phrase',text:phrase}); }
       await speech.finish();
       if (epoch !== this.epoch) return;
       this.history.push({role:'assistant',content:full});
       clearTimeout(this.timer); this.speech = undefined;
       send({type:'response.done'});
-    } catch { if (epoch === this.epoch) this.fail('Response or voice service failed. Check model access, voice ID, and provider limits.'); }
+      if(this.options.textOnly)send({type:'status',state:'ready'});
+    } catch { if (epoch === this.epoch) this.fail(this.options.textOnly?'Codex response stopped. Check subscription access or start a new session.':'Response or voice service failed. Check model access, voice ID, and provider limits.'); }
   }
   get isActive() { return this.active; }
 }

@@ -10,8 +10,12 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.client.json",
     "lint": "eslint .",
     "test": "node --import tsx --test tests/*.test.ts",
+    "test:setup": "python3 -B tests/setup_voice_test.py",
     "test:ui": "playwright test",
     "demo:background": "node scripts/demo.mjs",
+    "setup:voice": "python3 scripts/setup-voice.py",
+    "voice:background": "node --env-file-if-exists=.env.voice scripts/demo.mjs --codex-voice",
+    "codex:background": "node scripts/demo.mjs --codex",
     "mic:background": "node scripts/demo.mjs --local-mic",
     "build:native": "sh scripts/build-native.sh",
     "test:native": "node scripts/test-native.mjs"

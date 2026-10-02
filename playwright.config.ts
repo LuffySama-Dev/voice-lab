@@ -5,7 +5,7 @@ export default defineConfig({
   webServer:{
     command:'node --import tsx src/server.ts',
     env:{
-      PORT:'4318',YAP_READY:'0',LOCAL_MIC_ENABLED:'0',
+      PORT:'4318',YAP_READY:'0',LOCAL_MIC_ENABLED:'0',CODEX_AI_ENABLED:'0',ELEVEN_TTS_ENABLED:'0',
       PAID_SERVICES_ENABLED:'',
       OPENAI_API_KEY:'',
       ELEVENLABS_API_KEY:'',

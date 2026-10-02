@@ -35,3 +35,24 @@ test('continuous local transcription appends segments beyond old turn timeout wi
   assert.equal(commits,0);assert.equal(closes,0);assert.equal(events.some(e=>e.type==='error'),false);assert.equal(events.filter(e=>e.type==='transcript.delta').length,2);
   session.commit();assert.equal(commits,1);session.cancel(true);assert.equal(closes,1);
 });
+
+test('text-only reply never initializes voice or emits audio phrases',async()=>{
+  const m=mock();let speakCalls=0;m.provider.speak=async()=>{speakCalls++;throw new Error('Voice must remain off');};
+  const events:Record<string,unknown>[]=[];const session=new Session(m.provider,e=>events.push(e),false,{textOnly:true});await session.reply('Synthetic text');
+  assert.equal(speakCalls,0);assert.equal(events.some(e=>e.type==='audio'||e.type==='phrase'),false);assert.ok(events.some(e=>e.type==='response.delta'));assert.ok(events.some(e=>e.state==='ready'));session.cancel(true);
+});
+test('text stability auto-commit resets on revised drafts and cancels on Stop',async(t)=>{
+  t.mock.timers.enable({apis:['setTimeout']});const m=mock();let emit:Emit=()=>{},commits=0;
+  m.provider.recognize=async callback=>{emit=callback;return {native:true,append:()=>{},cancel:()=>{},commit:()=>commits++};};
+  const session=new Session(m.provider,()=>{},false,{textOnly:true,autoTurnMs:1600});await session.listen();
+  emit({type:'transcript.snapshot',finalized:'Question.',draft:''});t.mock.timers.tick(1000);emit({type:'transcript.snapshot',finalized:'Question.',draft:' More'});t.mock.timers.tick(2000);assert.equal(commits,0);
+  emit({type:'transcript.snapshot',finalized:'Question. More words.',draft:''});t.mock.timers.tick(1600);assert.equal(commits,1);
+  session.cancel(true);await session.listen();emit({type:'transcript.snapshot',finalized:'Another question.',draft:''});session.cancel(true);t.mock.timers.tick(2000);assert.equal(commits,1);
+});
+
+test('committed voice clauses stream in order only after native capture closes',async()=>{
+  const calls:string[]=[];let finishReply:()=>void=()=>{};const replyDone=new Promise<void>(r=>{finishReply=r;});
+  const provider:Providers={recognize:async emit=>({native:true,append:()=>{},commit:()=>emit({type:'transcript.final',text:'Synthetic question'}),cancel:()=>calls.push('capture-closed')}),async *generate(){yield 'First clause, ';assert.ok(calls.includes('voice:First clause, '));yield 'second clause.';},speak:async()=>{assert.ok(calls.includes('capture-closed'));return{push:text=>calls.push('voice:'+text),finish:async()=>{},cancel:()=>{}};}};
+  const session=new Session(provider,e=>{if(e.type==='response.done')finishReply();});await session.listen();session.commit();await replyDone;
+  assert.deepEqual(calls.filter(c=>c.startsWith('voice:')),['voice:First clause, ','voice:second clause.']);session.cancel(true);
+});

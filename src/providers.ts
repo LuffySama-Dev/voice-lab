@@ -1,4 +1,5 @@
 import WebSocket from 'ws';
+import {elevenSpeech} from './eleven.js';
 import {setTimeout as delay} from 'node:timers/promises';
 import type {Emit, Providers, Recognition, Speech} from './core.js';
 
@@ -75,26 +76,7 @@ export class LiveProviders implements Providers {
     if(!completed) throw new Error('Stream interrupted');
   }
   async speak(emit: Emit, signal: AbortSignal): Promise<Speech> {
-    const ws = await this.transport.connect('wss://api.elevenlabs.io/v1/text-to-dialogue/stream-input?model_id=eleven_v4_turbo&output_format=pcm_24000',{'xi-api-key':this.config.elevenKey},signal);
-    let finalized = false;
-    let finishResolve: () => void;
-    let finishReject: (e: Error) => void;
-    const completion = new Promise<void>((resolve,reject)=>{finishResolve=resolve;finishReject=reject;});
-    // Attach immediately: provider errors can arrive before finish() is awaited.
-    void completion.catch(()=>{});
-    const keepAlive = setInterval(()=>{try { send(ws,{keep_alive:true}); } catch { finishReject(new Error('Voice disconnected')); }},10_000);
-    ws.on('message',raw=>{
-      try {
-        const e = JSON.parse(raw.toString());
-        if(e.error) { finishReject(new Error('Voice rejected')); ws.terminate(); }
-        if(e.audio) emit({type:'audio',audio:e.audio,sampleRate:24000});
-        if(e.is_final) { finalized=true; finishResolve(); ws.close(); }
-      } catch { finishReject(new Error('Invalid voice response')); ws.terminate(); }
-    });
-    ws.on('error',()=>finishReject(new Error('Voice failed')));
-    ws.on('close',()=>{clearInterval(keepAlive); if(!finalized) finishReject(new Error('Voice disconnected'));});
-    send(ws,{voices:[this.config.voice]});
-    return {push:text=>send(ws,{inputs:[{text,voice_id:this.config.voice,new_turn:false}],flush:true}),finish:()=>{send(ws,{close_socket:true});return completion;},cancel:()=>{clearInterval(keepAlive);ws.terminate();}};
+    return elevenSpeech(this.config,this.transport.connect,emit,signal);
   }
 }
 export class DemoProviders implements Providers {

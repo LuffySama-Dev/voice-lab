@@ -3,3 +3,7 @@
 .recording{color:#ffd0bb;font-size:9px;font-weight:650;letter-spacing:1px;margin:0 0 12px}.toolbar{flex-wrap:wrap}.mode-switch button{padding:8px 12px}
 
 .draft-text{color:#bed49f;font-style:italic;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:#80986b;text-underline-offset:4px}.finalized-text{color:inherit}
+
+.mode-switch{flex-wrap:wrap}.toolbar{flex-wrap:wrap}.mode-switch button{padding:8px 11px}
+
+#codex-link{display:block;color:var(--accent);text-underline-offset:3px}
