@@ -16,6 +16,8 @@ This is a saved checkpoint, not a production-ready voice agent. Pausing developm
 
 ## Run locally
 
+For a credentials-free first look, run `npm ci && npm run dev`, open http://localhost:4317, and select **Demo**. Demo uses scripted responses and synthetic tones; it does not demonstrate live model latency, recognition accuracy, or voice quality. Do not enter private information for a public walkthrough. Live modes require separate native setup and explicit consent as described below.
+
 Requirements: Node 24, an Apple Silicon Mac with macOS 26+, Xcode with the macOS 26+ Speech APIs, Google Chrome, and installed speech-language assets. The native build script uses the standard Xcode application location. YAP 1.2.1 must also be installed (`brew install yap`) for the readiness gate and optional conversation adapter.
 
 ```sh
@@ -202,3 +204,7 @@ UI tests use installed Google Chrome via Playwright on separate localhost port 4
 - [Apple SpeechAnalyzer and volatile results](https://developer.apple.com/videos/play/wwdc2025/277/).
 - [OpenAI response streaming](https://developers.openai.com/api/docs/guides/streaming-responses).
 - [ElevenLabs realtime Text-to-Dialogue](https://elevenlabs.io/docs/eleven-api/guides/how-to/websockets/realtime-tdd) and [TTS versus TTD protocols](https://elevenlabs.io/docs/eleven-api/guides/how-to/websockets/tts-vs-ttd-websockets).
+
+## License
+
+Original project code is available under the [MIT License](LICENSE). The YAP-derived native portions retain their upstream CC0-1.0 dedication; see [native/NOTICE.md](native/NOTICE.md) and [the upstream license](native/LICENSE-YAP-CC0.txt). Dependencies retain their own licenses and are installed separately. Apple frameworks/models, Codex services, and ElevenLabs voices/services are not included or licensed by this repository. This project is independent and is not an official product of those providers.
