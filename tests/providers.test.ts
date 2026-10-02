@@ -52,3 +52,13 @@ test('Eleven setup refuses missing key before connect and bounds abandoned repli
   let calls=0;await assert.rejects(elevenSpeech({elevenKey:'',voice:'synthetic'},async()=>{calls++;throw new Error();},()=>{},new AbortController().signal));assert.equal(calls,0);
   t.mock.timers.enable({apis:['setTimeout','setInterval']});const socket=new Socket();const speech=await elevenSpeech(config,async()=>socket as unknown as WebSocket,()=>{},new AbortController().signal);t.mock.timers.tick(120001);await assert.rejects(speech.finish());
 });
+
+test('Eleven v4 expressive cues stay in the existing TTD text field with no parameter changes',async()=>{
+  const socket=new Socket();const speech=await elevenSpeech(config,async()=>socket as unknown as WebSocket,()=>{},new AbortController().signal);
+  speech.push('[warmly] That is good news. ');speech.push('[curious] What happened next?');const done=speech.finish();
+  assert.deepEqual(socket.frames.filter(f=>f.inputs),[
+    {inputs:[{text:'[warmly] That is good news. ',voice_id:'synthetic-voice',new_turn:false}],flush:true},
+    {inputs:[{text:'[curious] What happened next?',voice_id:'synthetic-voice',new_turn:false}],flush:true},
+  ]);
+  socket.emit('message',Buffer.from('{"is_final":true}'));await done;
+});

@@ -1,5 +1,6 @@
 import http from 'node:http';
-import {codexReadiness,CodexProviders} from './codex.js';
+import {OpenRouterProviders,openrouterReadiness} from './openrouter.js';
+import {codexReadiness,codexRuntime,CodexProviders} from './codex.js';
 import {elevenReadiness} from './eleven.js';
 import {createCodexClient} from './codex-rpc.js';
 import {readFile} from 'node:fs/promises';
@@ -9,6 +10,7 @@ import {WebSocketServer,WebSocket} from 'ws';
 import {LiveYapProviders} from './live-yap.js';
 import {YapProviders,yapAvailable} from './yap.js';
 import {Session} from './core.js';
+import {HandsFreeSession} from './hands-free.js';
 import {configuration,missing,DemoProviders,LiveProviders} from './providers.js';
 
 const port = Number(process.env.PORT || 4317);
@@ -19,11 +21,15 @@ const yapPath = process.env.YAP_PATH || '/opt/homebrew/bin/yap';
 const yapReady = process.env.YAP_READY === '1' && await yapAvailable(yapPath);
 const localPartials = process.env.LOCAL_PARTIALS_ENABLED === '1';
 const liveYapPath = fileURLToPath(new URL('../bin/yap-live',import.meta.url));
+const continuousPath = fileURLToPath(new URL('../bin/yap-live-continuous',import.meta.url));
+const handsFree = await yapAvailable(continuousPath);
 const partialsReady = !localPartials || await yapAvailable(liveYapPath);
 const localMicEnabled = process.env.LOCAL_MIC_ENABLED === '1' && yapReady && partialsReady;
-const codex = codexReadiness(process.env.CODEX_AI_ENABLED === '1');
+const codexSettings=codexRuntime(process.env);
+const codex = codexReadiness(process.env.CODEX_AI_ENABLED === '1',codexSettings);
 const codexBinary = process.env.CODEX_PATH || '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex';
 const codexCwd = fileURLToPath(new URL('../.runtime/codex-empty',import.meta.url));
+const openrouter=openrouterReadiness(process.env);
 const eleven = elevenReadiness(process.env.ELEVEN_TTS_ENABLED === '1',config);
 const paidServicesEnabled = process.env.PAID_SERVICES_ENABLED === '1';
 const setupMissing = () => [...missing(config), ...(asr === 'yap' && !yapReady ? ['YAP_READY (complete native setup first)'] : [])];
@@ -38,7 +44,7 @@ const server = http.createServer(async(req,res)=>{
   res.setHeader('Permissions-Policy','microphone=(self), camera=()');
   if(!hosts.has(req.headers.host || '')) {res.writeHead(403).end();return;}
   if(req.method!=='GET') {res.writeHead(405).end();return;}
-  if(req.url==='/api/config') {res.setHeader('Content-Type','application/json');res.end(JSON.stringify({token,codex,eleven,missing:setupMissing(),asr,yapReady,localMicEnabled,paidServicesEnabled,localPartials,model:config.model,effort:config.effort,tier:config.tier}));return;}
+  if(req.url==='/api/config') {res.setHeader('Content-Type','application/json');res.end(JSON.stringify({token,codex,openrouter,eleven,handsFree,missing:setupMissing(),asr,yapReady,localMicEnabled,paidServicesEnabled,localPartials,model:config.model,effort:config.effort,tier:config.tier}));return;}
   const pathname = new URL(req.url || '/',`http://127.0.0.1:${port}`).pathname;
   const file=files[pathname];
   if(!file) {res.writeHead(404).end();return;}
@@ -51,7 +57,7 @@ server.on('upgrade',(req,socket,head)=>{
   wss.handleUpgrade(req,socket,head,ws=>wss.emit('connection',ws));
 });
 wss.on('connection',ws=>{
-  let session: Session | undefined; let mode='';
+  let session: Session | HandsFreeSession | undefined; let mode='';
   const emit = (event: Record<string,unknown>)=>{if(ws.readyState===WebSocket.OPEN) {if(ws.bufferedAmount>4*1024*1024){ws.terminate();return;} ws.send(JSON.stringify(event));}};
   ws.on('message',raw=>{
     try {
@@ -60,21 +66,25 @@ wss.on('connection',ws=>{
         session?.cancel(true);
         mode=e.mode;
         const voiceEnabled=mode==='codex'&&e.voice===true;
+        const useRouter=mode==='codex'&&e.provider==='openrouter';
+        if(e.provider!==undefined&&!['codex','openrouter'].includes(e.provider))throw Error('Invalid provider');
+        if(useRouter&&!openrouter.available){emit({type:'error',message:openrouter.reason});return;}
         if(voiceEnabled&&!eleven.available){emit({type:'error',message:'Eleven v4 Turbo is not enabled or voice setup is incomplete. Complete private local voice setup before starting speech.'});return;}
         if(mode!=='demo' && mode!=='live' && mode!=='local' && mode!=='codex') throw new Error('Invalid mode');
-        if(mode==='codex' && !codex.available){emit({type:'error',message:codex.reason});return;}
-        if(mode==='codex' && (!localMicEnabled || !localPartials)){emit({type:'error',message:'Codex voice input needs the local live-caption helper. Launch with npm run codex:background.'});return;}
+        if(mode==='codex' && !useRouter && !codex.available){emit({type:'error',message:codex.reason});return;}
+        if(mode==='codex' && (!localMicEnabled || !localPartials || !handsFree)){emit({type:'error',message:'Codex voice input needs the continuous native helper. Run npm run build:continuous, then restart the Codex or voice server.'});return;}
         if(mode==='local' && !localMicEnabled) {emit({type:'error',message:'Local microphone setup is not enabled. Run npm run mic:background after completing YAP setup.'});return;}
         if(mode==='live' && !paidServicesEnabled) {emit({type:'error',message:'Paid services are disabled on this server. Use Local mic to test transcription without cloud calls.'});return;}
         if(mode==='live' && setupMissing().length) {emit({type:'error',message:'Live mode needs local YAP setup and provider credentials. Review README, then restart the server.'});return;}
         const nativeProvider = mode==='local' && localPartials ? new LiveYapProviders(config,liveYapPath,process.env.YAP_LOCALE || 'en-US') : new YapProviders(config,yapPath,process.env.YAP_LOCALE || 'en-US');
-        const provider=mode==='codex'?new CodexProviders(config,liveYapPath,process.env.YAP_LOCALE || 'en-US',()=>createCodexClient(codexBinary,codexCwd),voiceEnabled):mode==='demo'?new DemoProviders():mode==='local'||asr==='yap'?nativeProvider:new LiveProviders(config);
-        session=new Session(provider,emit,mode==='local',mode==='codex'?{textOnly:!voiceEnabled,autoTurnMs:1600}:{});
+        const provider=useRouter?new OpenRouterProviders(config,continuousPath,process.env.YAP_LOCALE || 'en-US',process.env.OPENROUTER_API_KEY||'',voiceEnabled):mode==='codex'?new CodexProviders(config,continuousPath,process.env.YAP_LOCALE || 'en-US',signal=>createCodexClient(codexBinary,codexCwd,signal,{...codexSettings,delivery:voiceEnabled}),voiceEnabled,{continuous:true}):mode==='demo'?new DemoProviders():mode==='local'||asr==='yap'?nativeProvider:new LiveProviders(config);
+        session=mode==='codex'?new HandsFreeSession(provider,emit,{textOnly:!voiceEnabled}):new Session(provider,emit,mode==='local');
         if(mode==='live'||mode==='local'||mode==='codex') void session.listen(); else emit({type:'status',state:'demo-ready'});
       } else if(e.type==='stop') {session?.cancel(true); session=undefined;}
       else if(e.type==='cancel') session?.cancel();
       else if(e.type==='listen' && (mode==='live'||mode==='local'||mode==='codex')) void session?.listen();
       else if(e.type==='commit') session?.commit();
+      else if(e.type==='playback.done' && session instanceof HandsFreeSession && Number.isSafeInteger(e.epoch)) session.playbackDone(e.epoch);
       else if(e.type==='audio' && typeof e.audio==='string' && e.audio.length<=64_000 && /^[A-Za-z0-9+/]*={0,2}$/.test(e.audio)) session?.append(e.audio);
       else if(e.type==='text' && mode==='demo' && typeof e.text==='string' && e.text.trim() && e.text.length<=2000) void session?.reply(e.text.trim());
     } catch {session?.cancel(true);emit({type:'error',message:'Invalid session message. Start again.'});}

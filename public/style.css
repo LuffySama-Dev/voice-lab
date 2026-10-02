@@ -7,3 +7,5 @@
 .mode-switch{flex-wrap:wrap}.toolbar{flex-wrap:wrap}.mode-switch button{padding:8px 11px}
 
 #codex-link{display:block;color:var(--accent);text-underline-offset:3px}
+
+#reply-provider{max-width:100%;margin-top:8px;padding:9px 10px;color:var(--text,#e6eadf);background:#20291f;border:1px solid #43523a;border-radius:8px;font:inherit}#reply-provider:disabled{opacity:.6}

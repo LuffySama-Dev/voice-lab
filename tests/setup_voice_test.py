@@ -43,6 +43,33 @@ class SetupVoiceTest(unittest.TestCase):
             self.assertEqual(file.read_bytes(), previous)
             self.assertNotIn(SYNTHETIC_KEY, output)
 
+    def test_openrouter_setup_keeps_usage_disabled_and_voice_file_untouched(self):
+        source = SOURCE.with_name("setup-openrouter.py")
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            (directory / "scripts").mkdir()
+            script = directory / "scripts" / "setup-openrouter.py"
+            shutil.copyfile(source, script)
+            voice = directory / ".env.voice"
+            voice.write_text("synthetic existing voice setup")
+            output, code = self.run_tty(script, [(b"key locally: ", b"SETUP\n"), (b"API key (hidden): ", SYNTHETIC_KEY.encode() + b"\n")])
+            self.assertEqual(code, 0)
+            self.assertNotIn(SYNTHETIC_KEY, output)
+            file = directory / ".env.openrouter"
+            self.assertEqual(stat.S_IMODE(file.stat().st_mode), 0o600)
+            self.assertIn("OPENROUTER_ENABLED=0", file.read_text())
+            self.assertEqual(voice.read_text(), "synthetic existing voice setup")
+            previous = file.read_bytes()
+            output, code = self.run_tty(script, [])
+            self.assertNotEqual(code, 0)
+            self.assertEqual(file.read_bytes(), previous)
+            self.assertNotIn(SYNTHETIC_KEY, output)
+
+    def test_openrouter_rejects_noninteractive_secret_entry(self):
+        result = subprocess.run(["python3", "-B", str(SOURCE.with_name("setup-openrouter.py"))], input="", text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires a TTY", result.stderr)
+
     def run_tty(self, script, steps):
         pid, descriptor = pty.fork()
         if pid == 0:

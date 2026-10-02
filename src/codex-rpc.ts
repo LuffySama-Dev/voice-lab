@@ -1,5 +1,5 @@
 import {spawn,type ChildProcess} from 'node:child_process';
-import {CodexReplyClient,type RpcTransport} from './codex.js';
+import {CodexReplyClient,type RpcTransport,type CodexRuntime} from './codex.js';
 import {mkdir} from 'node:fs/promises';
 
 /** Bounded JSONL transport for the documented app-server stdio interface. Never logs frames. */
@@ -52,25 +52,36 @@ export class StdioRpc implements RpcTransport {
 }
 
 /** Uses the existing supported ChatGPT sign-in; never reads or copies credentials. */
-export async function connectCodex(binary:string,cwd:string):Promise<StdioRpc>{
+export async function connectCodex(binary:string,cwd:string,signal?:AbortSignal):Promise<StdioRpc>{
+  if(signal?.aborted)throw new Error('Cancelled');
   const child=spawn(binary,['app-server','--stdio','-c','forced_login_method="chatgpt"',...['features.shell_tool=false','features.unified_exec=false','features.apps=false','features.plugins=false','features.hooks=false','features.multi_agent=false','features.view_image=false','web_search="disabled"','project_doc_max_bytes=0'].flatMap(value=>['-c',value])],{
     cwd,stdio:['pipe','pipe','pipe'],env:{PATH:process.env.PATH,HOME:process.env.HOME,LANG:process.env.LANG,CODEX_HOME:process.env.CODEX_HOME},
   });
   const rpc=new StdioRpc(child);
-  try{await rpc.request('initialize',{clientInfo:{name:'voice_lab',version:'0.1.0'},capabilities:{experimentalApi:true}});rpc.initialized();return rpc;}
+  const abort=()=>rpc.close();
+  signal?.addEventListener('abort',abort,{once:true});
+  if(signal?.aborted)abort();
+  try{await rpc.request('initialize',{clientInfo:{name:'voice_lab',version:'0.1.0'},capabilities:{experimentalApi:true}});if(signal?.aborted)throw new Error('Cancelled');rpc.initialized();return rpc;}
   catch{rpc.close();throw new Error('Codex initialization failed');}
+  finally{signal?.removeEventListener('abort',abort);}
 }
 
-export async function createCodexClient(binary:string,cwd:string){
+export async function createCodexClient(binary:string,cwd:string,signal?:AbortSignal,runtime:CodexRuntime={}){
+  if(signal?.aborted)throw new Error('Cancelled');
   await mkdir(cwd,{recursive:true,mode:0o700});
-  const rpc=await connectCodex(binary,cwd);
+  const rpc=await connectCodex(binary,cwd,signal);
+  const abort=()=>rpc.close();
+  signal?.addEventListener('abort',abort,{once:true});
+  if(signal?.aborted)abort();
   try{
     const account=await rpc.request('account/read',{refreshToken:false});
     if((account.account as {type?:string}|undefined)?.type!=='chatgpt')throw new Error('ChatGPT sign-in required');
     const inventory=await rpc.request('mcpServerStatus/list',{limit:100,detail:'toolsAndAuthOnly'});
+    if(signal?.aborted)throw new Error('Cancelled');
     if(!Array.isArray(inventory.data)||inventory.nextCursor)throw new Error('Incomplete MCP inventory');
     const disabled:Record<string,unknown>={};
     for(const server of inventory.data){if(typeof server.name!=='string')throw new Error('Invalid MCP inventory');disabled[server.name]={enabled:false};}
-    return new CodexReplyClient(rpc,cwd,disabled);
+    return new CodexReplyClient(rpc,cwd,disabled,runtime);
   }catch{rpc.close();throw new Error('Codex setup failed. Check the existing ChatGPT sign-in.');}
+  finally{signal?.removeEventListener('abort',abort);}
 }

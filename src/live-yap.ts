@@ -9,7 +9,7 @@ let launchQueue: Promise<void> = Promise.resolve();
 const failureMessage = 'Live local transcription stopped. Check microphone permission, language assets, and the local helper setup, then start again.';
 
 export class LiveYapProviders extends LiveProviders {
-  constructor(config: Config, private binary: string, private locale: string) { super(config); }
+  constructor(config: Config, private binary: string, private locale: string, private liveOptions: {continuous?: boolean} = {}) { super(config); }
   override recognize(emit: Emit, signal: AbortSignal): Promise<Recognition> {
     // Reserve launch order before any asynchronous availability check.
     const result = launchQueue.then(async () => {
@@ -17,24 +17,25 @@ export class LiveYapProviders extends LiveProviders {
       if (signal.aborted) throw new Error('Cancelled');
       if (!isAbsolute(this.binary) || !await yapAvailable(this.binary)) throw new Error('Local helper unavailable');
       if (signal.aborted) throw new Error('Cancelled');
-      const child = spawn(this.binary, ['--locale', this.locale], {
+      const child = spawn(this.binary, ['--locale', this.locale, ...(this.liveOptions.continuous ? ['--continuous'] : [])], {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {PATH: process.env.PATH, HOME: process.env.HOME, LANG: process.env.LANG || 'en_US.UTF-8'},
       });
-      return recognizeLiveProcess(child, emit, signal);
+      return recognizeLiveProcess(child, emit, signal, this.liveOptions);
     });
     launchQueue = result.then(() => {}, () => {});
     return result;
   }
 }
 
-/** A bounded NDJSON protocol. Snapshots replace drafts; only done + exit confirms a final. */
+/** Bounded NDJSON: legacy snapshots finalize on clean exit; continuous segments stay live until cancellation. */
 export function recognizeLiveProcess(
   child: ChildProcess, emit: Emit, signal: AbortSignal,
-  options: {startupTimeoutMs?: number; commitTimeoutMs?: number} = {},
+  options: {startupTimeoutMs?: number; commitTimeoutMs?: number; continuous?: boolean} = {},
 ): Promise<Recognition> {
   let ready = false, committing = false, cancelled = false, ended = false, failed = false;
   let pending = '', completedText: string | undefined;
+  let segmentId = 1, finalizedEndMs = 0, activityTimeMs = 0;
   let commitTimer: ReturnType<typeof setTimeout> | undefined;
   let resolveClosed: () => void = () => {};
   previousClosed = new Promise<void>(resolve => { resolveClosed = resolve; });
@@ -61,6 +62,8 @@ export function recognizeLiveProcess(
     native: true,
     append: () => {},
     commit: () => {
+      // Conversational boundaries never finalize or replace a continuous capture.
+      if (options.continuous) return;
       if (committing || cancelled || ended) return;
       committing = true;
       commitTimer = setTimeout(fail, options.commitTimeoutMs ?? 15_000);
@@ -75,12 +78,26 @@ export function recognizeLiveProcess(
     if (event.type === 'error') { fail(); return; }
     if (completedText !== undefined) throw new Error('Frame after completion');
     if (event.type === 'ready') {
-      if (ready) throw new Error('Duplicate readiness');
+      if (ready || (options.continuous ? event.continuous !== true : event.continuous === true)) throw new Error('Invalid readiness');
       ready = true;
       clearTimeout(startupTimer);
       resolveReady(recognition);
+    } else if (event.type === 'transcript.segment') {
+      const {id, text, final, startMs, endMs} = event;
+      if (!ready || !options.continuous || !Number.isSafeInteger(id) || id !== segmentId ||
+          typeof text !== 'string' || text.length > 100_000 || typeof final !== 'boolean' ||
+          !finiteNonnegative(startMs) || !finiteNonnegative(endMs) || endMs < startMs || startMs < finalizedEndMs - 1) throw new Error('Invalid segment');
+      emit({type: 'transcript.segment', id, text, final, startMs, endMs});
+      if (final) { segmentId++; finalizedEndMs = endMs; }
+    } else if (event.type === 'audio.activity') {
+      const {rms, timeMs, durationMs} = event;
+      if (!ready || !options.continuous || !finiteNonnegative(rms) || rms > 1 ||
+          !finiteNonnegative(timeMs) || timeMs <= activityTimeMs || !finiteNonnegative(durationMs) ||
+          durationMs <= 0 || durationMs > 250 || timeMs < durationMs || timeMs - durationMs < activityTimeMs - 1) throw new Error('Invalid activity');
+      activityTimeMs = timeMs;
+      emit({type: 'audio.activity', rms, timeMs, durationMs});
     } else if (event.type === 'snapshot') {
-      if (!ready || typeof event.finalized !== 'string' || typeof event.draft !== 'string' || event.finalized.length + event.draft.length > 100_000) throw new Error('Invalid snapshot');
+      if (!ready || options.continuous || typeof event.finalized !== 'string' || typeof event.draft !== 'string' || event.finalized.length + event.draft.length > 100_000) throw new Error('Invalid snapshot');
       emit({type: 'transcript.snapshot', finalized: event.finalized, draft: event.draft});
     } else if (event.type === 'done') {
       if (!ready || !committing || typeof event.text !== 'string' || event.text.length > 100_000) throw new Error('Invalid completion');
@@ -119,4 +136,8 @@ export function recognizeLiveProcess(
   const startupTimer = setTimeout(fail, options.startupTimeoutMs ?? 30_000);
   if (signal.aborted) cancel();
   return result;
+}
+
+function finiteNonnegative(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }

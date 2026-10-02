@@ -6,7 +6,7 @@ export default defineConfig({
     command:'node --import tsx src/server.ts',
     env:{
       PORT:'4318',YAP_READY:'0',LOCAL_MIC_ENABLED:'0',CODEX_AI_ENABLED:'0',ELEVEN_TTS_ENABLED:'0',
-      PAID_SERVICES_ENABLED:'',
+      PAID_SERVICES_ENABLED:'',OPENROUTER_ENABLED:'0',OPENROUTER_API_KEY:'',
       OPENAI_API_KEY:'',
       ELEVENLABS_API_KEY:'',
       ELEVENLABS_VOICE_ID:'',

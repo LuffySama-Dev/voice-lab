@@ -2,6 +2,7 @@ export class Player {
   /** @type {AudioContext | null} */ context = null;
   /** @type {Set<AudioBufferSourceNode>} */ sources = new Set();
   next = 0;
+  /** @type {Set<()=>void>} */ waiters = new Set();
   /** @type {number | null} */ carry = null;
   async unlock() { if(!this.context || this.context.state==='closed') this.context=new AudioContext(); await this.context.resume(); }
   /** @param {string} base64 @param {number} rate */
@@ -14,12 +15,14 @@ export class Player {
     const length=Math.floor(bytes.length/2);if(!length)return;
     const buffer=ctx.createBuffer(1,length,rate);const channel=buffer.getChannelData(0);const view=new DataView(bytes.buffer);
     for(let i=0;i<length;i++)channel[i]=view.getInt16(i*2,true)/32768;
-    if(this.next-ctx.currentTime>30)throw new Error('Audio queue is too long. Please interrupt and try again.');
+    if(Math.max(0,this.next-ctx.currentTime)+buffer.duration>30)throw new Error('Audio queue is too long. Please interrupt and try again.');
     const source=ctx.createBufferSource();source.buffer=buffer;source.connect(ctx.destination);this.sources.add(source);
-    source.onended=()=>{this.sources.delete(source);source.disconnect();};
+    source.onended=()=>{this.sources.delete(source);source.disconnect();if(!this.sources.size)this.drained();};
     this.next=Math.max(this.next,ctx.currentTime+.035);source.start(this.next);this.next+=buffer.duration;
   }
-  clear(){for(const source of this.sources){source.onended=null;try{source.stop();}catch{/* Already stopped. */}source.disconnect();}this.sources.clear();this.next=0;this.carry=null;}
+  drained(){for(const resolve of this.waiters)resolve();this.waiters.clear();}
+  finished(){return this.sources.size?new Promise(resolve=>this.waiters.add(()=>resolve(undefined))):Promise.resolve();}
+  clear(){for(const source of this.sources){source.onended=null;try{source.stop();}catch{/* Already stopped. */}source.disconnect();}this.sources.clear();this.next=0;this.carry=null;this.drained();}
   get remaining(){return this.context?Math.max(0,this.next-this.context.currentTime)*1000:0;}
   close(){this.clear();const context=this.context;this.context=null;void context?.close().catch(()=>{});}
 }

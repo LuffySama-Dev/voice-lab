@@ -18,7 +18,11 @@
     "codex:background": "node scripts/demo.mjs --codex",
     "mic:background": "node scripts/demo.mjs --local-mic",
     "build:native": "sh scripts/build-native.sh",
-    "test:native": "node scripts/test-native.mjs"
+    "test:native": "node scripts/test-native.mjs",
+    "build:continuous": "sh scripts/build-native.sh bin/yap-live-continuous",
+    "test:continuous": "node scripts/test-native-continuous.mjs",
+    "setup:openrouter": "python3 scripts/setup-openrouter.py",
+    "openrouter:background": "node --env-file-if-exists=.env.voice --env-file-if-exists=.env.openrouter scripts/demo.mjs --openrouter"
   },
   "dependencies": {
     "ws": "^8.18.3"
